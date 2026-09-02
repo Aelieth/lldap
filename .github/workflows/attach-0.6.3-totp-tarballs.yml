@@ -1,0 +1,156 @@
+name: Attach 0.6.3-totp tarballs
+
+# GITHUB_TOKEN cannot retrigger `release` workflows, so this builds the
+# official-style musl tarballs from tag 0.6.3-totp and uploads them.
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  MSRV: "1.91.0"
+  RELEASE_TAG: 0.6.3-totp
+
+permissions:
+  contents: write
+
+jobs:
+  build-ui:
+    runs-on: ubuntu-latest
+    container:
+      image: lldap/rust-dev:latest
+    steps:
+      - uses: actions/checkout@v6.0.2
+        with:
+          ref: 0.6.3-totp
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "${{ env.MSRV }}"
+          targets: "wasm32-unknown-unknown"
+      - uses: actions/cache@v5
+        with:
+          path: |
+            /usr/local/cargo/bin
+            /usr/local/cargo/registry/index
+            /usr/local/cargo/registry/cache
+            /usr/local/cargo/git/db
+            target
+          key: totp-ui-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: totp-ui-
+      - name: Install wasm-pack
+        run: cargo install --locked wasm-pack || true
+        env:
+          RUSTFLAGS: ""
+      - name: Build frontend
+        run: ./app/build.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ui
+          path: app/
+
+  build-bin:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [armv7-unknown-linux-musleabihf, aarch64-unknown-linux-musl, x86_64-unknown-linux-musl]
+    container:
+      image: lldap/rust-dev:latest
+      env:
+        CARGO_TERM_COLOR: always
+        RUSTFLAGS: -Ctarget-feature=+crt-static
+        CARGO_HOME: ${GITHUB_WORKSPACE}/.cargo
+    steps:
+      - uses: actions/checkout@v6.0.2
+        with:
+          ref: 0.6.3-totp
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "${{ env.MSRV }}"
+          targets: "${{ matrix.target }}"
+      - uses: actions/cache@v5
+        with:
+          path: |
+            .cargo/bin
+            .cargo/registry/index
+            .cargo/registry/cache
+            .cargo/git/db
+            target
+          key: totp-bin-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: totp-bin-${{ matrix.target }}-
+      - name: Compile ${{ matrix.target }}
+        run: cargo build --target=${{ matrix.target }} --release -p lldap -p lldap_migration_tool -p lldap_set_password
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.target }}-lldap-bin
+          path: target/${{ matrix.target }}/release/lldap
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.target }}-lldap_migration_tool-bin
+          path: target/${{ matrix.target }}/release/lldap_migration_tool
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.target }}-lldap_set_password-bin
+          path: target/${{ matrix.target }}/release/lldap_set_password
+
+  attach-release:
+    needs: [build-ui, build-bin]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: bin/
+      - name: Rename binaries
+        run: |
+          mv bin/aarch64-unknown-linux-musl-lldap-bin/lldap bin/aarch64-lldap
+          mv bin/x86_64-unknown-linux-musl-lldap-bin/lldap bin/amd64-lldap
+          mv bin/armv7-unknown-linux-musleabihf-lldap-bin/lldap bin/armhf-lldap
+          mv bin/aarch64-unknown-linux-musl-lldap_migration_tool-bin/lldap_migration_tool bin/aarch64-lldap_migration_tool
+          mv bin/x86_64-unknown-linux-musl-lldap_migration_tool-bin/lldap_migration_tool bin/amd64-lldap_migration_tool
+          mv bin/armv7-unknown-linux-musleabihf-lldap_migration_tool-bin/lldap_migration_tool bin/armhf-lldap_migration_tool
+          mv bin/aarch64-unknown-linux-musl-lldap_set_password-bin/lldap_set_password bin/aarch64-lldap_set_password
+          mv bin/x86_64-unknown-linux-musl-lldap_set_password-bin/lldap_set_password bin/amd64-lldap_set_password
+          mv bin/armv7-unknown-linux-musleabihf-lldap_set_password-bin/lldap_set_password bin/armhf-lldap_set_password
+          chmod +x bin/*-lldap bin/*-lldap_migration_tool bin/*-lldap_set_password
+      - uses: actions/download-artifact@v8
+        with:
+          name: ui
+          path: web
+      - name: Pack web UI
+        run: |
+          mkdir app
+          mv web/index_local.html app/index.html
+          mv web/static app/static
+          mv web/pkg app/pkg
+          sudo apt-get update
+          sudo apt-get install -y wget
+          for file in $(cat app/static/libraries.txt); do wget -P app/static "$file"; done
+          for file in $(cat app/static/fonts/fonts.txt); do wget -P app/static/fonts "$file"; done
+          chmod a+r -R .
+      - name: Pack tarballs
+        run: |
+          mkdir aarch64-lldap amd64-lldap armhf-lldap
+          mv bin/aarch64-lldap aarch64-lldap/lldap
+          mv bin/amd64-lldap amd64-lldap/lldap
+          mv bin/armhf-lldap armhf-lldap/lldap
+          mv bin/aarch64-lldap_migration_tool aarch64-lldap/lldap_migration_tool
+          mv bin/amd64-lldap_migration_tool amd64-lldap/lldap_migration_tool
+          mv bin/armhf-lldap_migration_tool armhf-lldap/lldap_migration_tool
+          mv bin/aarch64-lldap_set_password aarch64-lldap/lldap_set_password
+          mv bin/amd64-lldap_set_password amd64-lldap/lldap_set_password
+          mv bin/armhf-lldap_set_password armhf-lldap/lldap_set_password
+          cp -r app aarch64-lldap/
+          cp -r app amd64-lldap/
+          cp -r app armhf-lldap/
+          tar -czvf aarch64-lldap.tar.gz aarch64-lldap/
+          tar -czvf amd64-lldap.tar.gz amd64-lldap/
+          tar -czvf armhf-lldap.tar.gz armhf-lldap/
+      - name: Upload to GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload 0.6.3-totp \
+            aarch64-lldap.tar.gz \
+            amd64-lldap.tar.gz \
+            armhf-lldap.tar.gz \
+            --repo Aelieth/lldap \
+            --clobber
