@@ -1,0 +1,126 @@
+name: Publish 0.6.3-totp
+
+# One-shot publisher for the contractor snapshot. Lives on
+# ci/publish-0.6.3-totp so the tagged totp tree stays unchanged.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  github-release:
+    name: Create GitHub release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create 0.6.3-totp release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if gh release view 0.6.3-totp --repo Aelieth/lldap >/dev/null 2>&1; then
+            echo "Release 0.6.3-totp already exists"
+            exit 0
+          fi
+          gh release create 0.6.3-totp \
+            --repo Aelieth/lldap \
+            --title "0.6.3-totp" \
+            --prerelease \
+            --latest=false \
+            --notes-file - <<'EOF'
+          # 0.6.3-totp
+
+          Pre-release snapshot of [Aelieth/lldap](https://github.com/Aelieth/lldap) `totp` for contractor evaluation.
+
+          This is **not** an official [lldap/lldap](https://github.com/lldap/lldap) release. It is LLDAP **0.6.3** plus optional TOTP two-factor authentication (RFC 6238), toward [lldap/lldap#631](https://github.com/lldap/lldap/issues/631).
+
+          - Tag: `0.6.3-totp`
+          - Commit: `7d9bc33a9b5a717d197e7e83e2f1a1545ad55024`
+          - Frozen branch: `release/0.6.3-totp`
+
+          ## What you get
+
+          - Optional TOTP MFA for the web UI and LDAP binds
+          - Combined login format: `password:123456` (colon + 6-digit code)
+          - Config: `enable_mfa = false | true | "always"` (default off)
+          - Exemption group `lldap_mfa_disabled` for service accounts
+          - Enrollment QR in the web UI; admin and self-reset
+          - Full reference: [docs/mfa.md](https://github.com/Aelieth/lldap/blob/0.6.3-totp/docs/mfa.md)
+
+          ## Run it
+
+          ### Docker
+
+          ```bash
+          docker pull ghcr.io/aelieth/lldap:0.6.3-totp
+          ```
+
+          Same compose/env as upstream `lldap/lldap`, with the image name replaced. Enable MFA with:
+
+          ```yaml
+          environment:
+            - LLDAP_ENABLE_MFA=true
+            # or: LLDAP_ENABLE_MFA=always
+          ```
+
+          ### Release tarballs
+
+          The **Docker Static** workflow attaches `amd64-lldap.tar.gz`, `aarch64-lldap.tar.gz`, and `armhf-lldap.tar.gz` to this release after it finishes. Unpack and run `./lldap run --config-file lldap_config.toml`.
+
+          ### From source
+
+          ```bash
+          git clone --branch 0.6.3-totp https://github.com/Aelieth/lldap.git
+          cd lldap
+          docker build -t lldap:0.6.3-totp .
+          ```
+
+          ## Notes
+
+          - MFA is **off** until you set `enable_mfa`.
+          - Replay/attempt limits are per-process (see `docs/mfa.md`).
+          - No backup codes in this snapshot.
+          EOF
+
+  docker:
+    name: Build and push GHCR image
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout 0.6.3-totp
+        uses: actions/checkout@v4
+        with:
+          ref: 0.6.3-totp
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/aelieth/lldap:0.6.3-totp
+            ghcr.io/aelieth/lldap:totp
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Make GHCR package public
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh api --method PUT \
+            -H "Accept: application/vnd.github+json" \
+            /user/packages/container/lldap/visibility \
+            -f visibility=public \
+            || echo "Could not set package visibility (may already be public, or first push still propagating)"
