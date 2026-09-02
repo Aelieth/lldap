@@ -1,0 +1,20 @@
+name: Republish 0.6.3-totp
+
+# Re-fires the `release` published event so Docker Static attaches tarballs.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  republish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Draft then publish 0.6.3-totp
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release edit 0.6.3-totp --repo Aelieth/lldap --draft
+          gh release edit 0.6.3-totp --repo Aelieth/lldap --prerelease --latest=false --draft=false
